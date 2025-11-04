@@ -1,0 +1,40 @@
+{
+  "version": "0.2.0",
+  "configurations": [
+    {
+      "name": "Run Extension",
+      "type": "extensionHost",
+      "request": "launch",
+      "args": [
+        "--extensionDevelopmentPath=${workspaceFolder}"
+      ],
+      "outFiles": [
+        "${workspaceFolder}/out/**/*.js"
+      ],      
+      "preLaunchTask": "npm: compile",
+      "skipFiles": [
+        "<node_internals>/**",
+        "${workspaceFolder}/node_modules/**/*.js"
+      ]      
+    },
+    {
+      "name": "Debug Python File",
+      "type": "debugpy",
+      "request": "launch",
+      "program": "${workspaceFolder}/test-files/sample.py",
+      "console": "integratedTerminal",
+      "cwd": "${workspaceFolder}/test-files"
+    },
+    {
+      "name": "Debug TypeScript File",
+      "type": "node",
+      "request": "launch",
+      "program": "${workspaceFolder}/test-files/sample.ts",
+      "outFiles": [
+        "${workspaceFolder}/test-files/**/*.js"
+      ],
+      "runtimeArgs": ["-r", "ts-node/register"],
+      "cwd": "${workspaceFolder}/test-files"
+    }
+  ]
+}
