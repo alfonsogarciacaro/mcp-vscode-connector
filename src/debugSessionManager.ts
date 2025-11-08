@@ -1,4 +1,6 @@
 import * as vscode from 'vscode';
+import { DebugConsentManager } from './debugConsentManager';
+import { SecurityUtils } from './securityUtils';
 
 export interface DebugSessionInfo {
   id: string;
@@ -25,6 +27,19 @@ export interface VariableInfo {
   type?: string;
   variablesReference?: number;
   presentationHint?: string;
+}
+
+export interface LaunchConfigurationInfo {
+  name: string;
+  type: string;
+  request: string;
+  program?: string;
+  args?: string[];
+  cwd?: string;
+  env?: { [key: string]: string };
+  console?: string;
+  internalConsoleOptions?: string;
+  [key: string]: any;
 }
 
 export class DebugSessionManager {
@@ -102,61 +117,164 @@ export class DebugSessionManager {
     hitCondition?: string;
     logMessage?: string;
   }): Promise<BreakpointInfo> {
-    const uri = vscode.Uri.file(file);
-    const document = await vscode.workspace.openTextDocument(uri);
+    try {
+      // Input validation
+      const fileValidation = SecurityUtils.validateFilePath(file);
+      if (!fileValidation.isValid) {
+        const error = SecurityUtils.createSafeError('setBreakpoint', fileValidation.error);
+        this.outputChannel.appendLine(`[SECURITY] Invalid file path for breakpoint: ${fileValidation.error}`);
+        throw new Error(error);
+      }
 
-    const position = new vscode.Position(
-      Math.max(0, line - 1), // Convert from 1-based to 0-based
-      column ? Math.max(0, column - 1) : 0
-    );
+      const lineValidation = SecurityUtils.validateLineNumber(line);
+      if (!lineValidation.isValid) {
+        const error = SecurityUtils.createSafeError('setBreakpoint', lineValidation.error);
+        this.outputChannel.appendLine(`[SECURITY] Invalid line number for breakpoint: ${lineValidation.error}`);
+        throw new Error(error);
+      }
 
-    const location = new vscode.Location(uri, position);
-    const breakpoint = new vscode.SourceBreakpoint(location, true, options?.condition, options?.hitCondition, options?.logMessage);
+      let validatedColumn: number | undefined;
+      if (column !== undefined) {
+        const columnValidation = SecurityUtils.validateColumnNumber(column);
+        if (!columnValidation.isValid) {
+          const error = SecurityUtils.createSafeError('setBreakpoint', columnValidation.error);
+          this.outputChannel.appendLine(`[SECURITY] Invalid column number for breakpoint: ${columnValidation.error}`);
+          throw new Error(error);
+        }
+        validatedColumn = column;
+      }
 
-    vscode.debug.addBreakpoints([breakpoint]);
+      let sanitizedCondition: string | undefined;
+      if (options?.condition) {
+        const conditionValidation = SecurityUtils.validateBreakpointCondition(options.condition);
+        if (!conditionValidation.isValid) {
+          const error = SecurityUtils.createSafeError('setBreakpoint', conditionValidation.error);
+          this.outputChannel.appendLine(`[SECURITY] Invalid breakpoint condition: ${conditionValidation.error}`);
+          throw new Error(error);
+        }
+        sanitizedCondition = conditionValidation.sanitizedCondition;
+      }
 
-    this.outputChannel.appendLine(`Set breakpoint at ${file}:${line}${column ? ':' + column : ''}`);
+      let sanitizedLogMessage: string | undefined;
+      if (options?.logMessage) {
+        const logValidation = SecurityUtils.validateLogMessage(options.logMessage);
+        if (!logValidation.isValid) {
+          const error = SecurityUtils.createSafeError('setBreakpoint', logValidation.error);
+          this.outputChannel.appendLine(`[SECURITY] Invalid breakpoint log message: ${logValidation.error}`);
+          throw new Error(error);
+        }
+        sanitizedLogMessage = logValidation.sanitizedMessage;
+      }
 
-    return {
-      id: this.generateBreakpointId(breakpoint),
-      file,
-      line,
-      column,
-      enabled: true,
-      condition: options?.condition,
-      hitCondition: options?.hitCondition,
-      logMessage: options?.logMessage
-    };
+      // Check if file exists in workspace
+      const fileExists = await SecurityUtils.fileExistsInWorkspace(fileValidation.sanitizedPath);
+      if (!fileExists) {
+        const error = SecurityUtils.createSafeError('setBreakpoint', 'File not found in workspace');
+        this.outputChannel.appendLine(`[SECURITY] Attempted to set breakpoint in non-existent file: ${fileValidation.sanitizedPath}`);
+        throw new Error(error);
+      }
+
+      const uri = vscode.Uri.file(fileValidation.sanitizedPath);
+      const document = await vscode.workspace.openTextDocument(uri);
+
+      const position = new vscode.Position(
+        Math.max(0, line - 1), // Convert from 1-based to 0-based
+        validatedColumn ? Math.max(0, validatedColumn - 1) : 0
+      );
+
+      const location = new vscode.Location(uri, position);
+      const breakpoint = new vscode.SourceBreakpoint(location, true, sanitizedCondition, options?.hitCondition, sanitizedLogMessage);
+
+      vscode.debug.addBreakpoints([breakpoint]);
+
+      const relativePath = SecurityUtils.getRelativePath(fileValidation.sanitizedPath);
+      this.outputChannel.appendLine(`[SECURITY] Set breakpoint at ${relativePath}:${line}${validatedColumn ? ':' + validatedColumn : ''}`);
+
+      return {
+        id: this.generateBreakpointId(breakpoint),
+        file: fileValidation.sanitizedPath,
+        line,
+        column: validatedColumn,
+        enabled: true,
+        condition: sanitizedCondition,
+        hitCondition: options?.hitCondition,
+        logMessage: sanitizedLogMessage
+      };
+    } catch (error) {
+      if (error instanceof Error && error.message.includes('SECURITY')) {
+        throw error;
+      }
+      // Re-throw any other errors
+      this.outputChannel.appendLine(`Error setting breakpoint: ${error instanceof Error ? error.message : String(error)}`);
+      throw error;
+    }
   }
 
   /**
    * Remove a breakpoint
    */
   public async removeBreakpoint(file: string, line: number, column?: number): Promise<boolean> {
-    const targetUri = vscode.Uri.file(file);
-
-    // Find the breakpoint to remove
-    const breakpointsToRemove = vscode.debug.breakpoints.filter(bp => {
-      if (bp instanceof vscode.SourceBreakpoint) {
-        const bpFile = bp.location.uri.fsPath;
-        const bpLine = bp.location.range.start.line + 1; // Convert to 1-based
-        const bpColumn = bp.location.range.start.character + 1;
-
-        return bpFile === file &&
-               bpLine === line &&
-               (!column || bpColumn === column);
+    try {
+      // Input validation
+      const fileValidation = SecurityUtils.validateFilePath(file);
+      if (!fileValidation.isValid) {
+        const error = SecurityUtils.createSafeError('removeBreakpoint', fileValidation.error);
+        this.outputChannel.appendLine(`[SECURITY] Invalid file path for breakpoint removal: ${fileValidation.error}`);
+        throw new Error(error);
       }
+
+      const lineValidation = SecurityUtils.validateLineNumber(line);
+      if (!lineValidation.isValid) {
+        const error = SecurityUtils.createSafeError('removeBreakpoint', lineValidation.error);
+        this.outputChannel.appendLine(`[SECURITY] Invalid line number for breakpoint removal: ${lineValidation.error}`);
+        throw new Error(error);
+      }
+
+      let validatedColumn: number | undefined;
+      if (column !== undefined) {
+        const columnValidation = SecurityUtils.validateColumnNumber(column);
+        if (!columnValidation.isValid) {
+          const error = SecurityUtils.createSafeError('removeBreakpoint', columnValidation.error);
+          this.outputChannel.appendLine(`[SECURITY] Invalid column number for breakpoint removal: ${columnValidation.error}`);
+          throw new Error(error);
+        }
+        validatedColumn = column;
+      }
+
+      const targetUri = vscode.Uri.file(fileValidation.sanitizedPath);
+
+      // Find the breakpoint to remove
+      const breakpointsToRemove = vscode.debug.breakpoints.filter(bp => {
+        if (bp instanceof vscode.SourceBreakpoint) {
+          const bpFile = bp.location.uri.fsPath;
+          const bpLine = bp.location.range.start.line + 1; // Convert to 1-based
+          const bpColumn = bp.location.range.start.character + 1;
+
+          return bpFile === fileValidation.sanitizedPath &&
+                 bpLine === line &&
+                 (!validatedColumn || bpColumn === validatedColumn);
+        }
+        return false;
+      });
+
+      if (breakpointsToRemove.length > 0) {
+        vscode.debug.removeBreakpoints(breakpointsToRemove);
+        const relativePath = SecurityUtils.getRelativePath(fileValidation.sanitizedPath);
+        this.outputChannel.appendLine(`[SECURITY] Removed breakpoint at ${relativePath}:${line}${validatedColumn ? ':' + validatedColumn : ''}`);
+        return true;
+      }
+
+      const relativePath = SecurityUtils.getRelativePath(fileValidation.sanitizedPath);
+      this.outputChannel.appendLine(`No breakpoint found at ${relativePath}:${line}${validatedColumn ? ':' + validatedColumn : ''}`);
       return false;
-    });
-
-    if (breakpointsToRemove.length > 0) {
-      vscode.debug.removeBreakpoints(breakpointsToRemove);
-      this.outputChannel.appendLine(`Removed breakpoint at ${file}:${line}${column ? ':' + column : ''}`);
-      return true;
+    } catch (error) {
+      if (error instanceof Error && error.message.includes('SECURITY')) {
+        throw error;
+      }
+      // Re-throw any other errors
+      this.outputChannel.appendLine(`Error removing breakpoint: ${error instanceof Error ? error.message : String(error)}`);
+      throw error;
     }
-
-    this.outputChannel.appendLine(`No breakpoint found at ${file}:${line}${column ? ':' + column : ''}`);
-    return false;
   }
 
   /**
@@ -266,28 +384,141 @@ export class DebugSessionManager {
     }
   }
 
+  
   /**
-   * Evaluate an expression in the current debug context
+   * Get all available launch configurations from .vscode/launch.json
    */
-  public async evaluateExpression(expression: string): Promise<string | null> {
+  public async getLaunchConfigurations(): Promise<LaunchConfigurationInfo[]> {
+    try {
+      const workspaceFolders = vscode.workspace.workspaceFolders;
+      if (!workspaceFolders) {
+        this.outputChannel.appendLine('No workspace folders found');
+        return [];
+      }
+
+      const configurations: LaunchConfigurationInfo[] = [];
+
+      for (const folder of workspaceFolders) {
+        const launchConfigs = await this.getLaunchConfigurationsForFolder(folder);
+        configurations.push(...launchConfigs);
+      }
+
+      return configurations;
+    } catch (error) {
+      this.outputChannel.appendLine(`Error getting launch configurations: ${error instanceof Error ? error.message : String(error)}`);
+      return [];
+    }
+  }
+
+  /**
+   * Start debugging with a specific launch configuration
+   */
+  public async startDebugging(configurationName: string, workspaceFolder?: string): Promise<boolean> {
+    try {
+      // Input validation
+      const configValidation = SecurityUtils.validateConfigurationName(configurationName);
+      if (!configValidation.isValid) {
+        const error = SecurityUtils.createSafeError('startDebugging', configValidation.error);
+        this.outputChannel.appendLine(`[SECURITY] Invalid configuration name: ${configValidation.error}`);
+        throw new Error(error);
+      }
+
+      // Check if we have consent to use this configuration
+      const canUse = await DebugConsentManager.canUseConfiguration(configurationName);
+      if (!canUse) {
+        this.outputChannel.appendLine(`[SECURITY] Debug configuration "${configurationName}" usage denied by user consent`);
+        return false;
+      }
+
+      let folder: vscode.WorkspaceFolder | undefined;
+
+      if (workspaceFolder) {
+        // Validate workspace folder path if provided
+        const folderValidation = SecurityUtils.validateFilePath(workspaceFolder);
+        if (!folderValidation.isValid) {
+          const error = SecurityUtils.createSafeError('startDebugging', `Invalid workspace folder: ${folderValidation.error}`);
+          this.outputChannel.appendLine(`[SECURITY] Invalid workspace folder: ${folderValidation.error}`);
+          throw new Error(error);
+        }
+        folder = vscode.workspace.workspaceFolders?.find(f => f.uri.fsPath === folderValidation.sanitizedPath);
+      } else {
+        folder = vscode.workspace.workspaceFolders?.[0]; // Use first workspace folder
+      }
+
+      if (!folder) {
+        this.outputChannel.appendLine('No workspace folder found');
+        return false;
+      }
+
+      this.outputChannel.appendLine(`[SECURITY] Starting debug session with approved configuration: ${configurationName}`);
+      const success = await vscode.debug.startDebugging(folder, configurationName);
+
+      if (success) {
+        this.outputChannel.appendLine(`Started debugging with configuration: ${configurationName}`);
+      } else {
+        this.outputChannel.appendLine(`Failed to start debugging with configuration: ${configurationName}`);
+      }
+
+      return success;
+    } catch (error) {
+      if (error instanceof Error && error.message.includes('SECURITY')) {
+        throw error;
+      }
+      this.outputChannel.appendLine(`Error starting debug session: ${error instanceof Error ? error.message : String(error)}`);
+      return false;
+    }
+  }
+
+  /**
+   * Stop the current active debug session
+   */
+  public async stopDebugging(): Promise<boolean> {
     const session = vscode.debug.activeDebugSession;
     if (!session) {
-      this.outputChannel.appendLine('No active debug session');
-      return null;
+      this.outputChannel.appendLine('No active debug session to stop');
+      return false;
     }
 
     try {
-      const result = await session.customRequest('evaluate', {
-        expression,
-        frameId: 0, // Use the top frame
-        context: 'repl'
-      });
-
-      this.outputChannel.appendLine(`Evaluated expression: ${expression} = ${result.result}`);
-      return result.result;
+      await vscode.debug.stopDebugging(session);
+      this.outputChannel.appendLine(`Stopped debug session: ${session.name}`);
+      return true;
     } catch (error) {
-      this.outputChannel.appendLine(`Error evaluating expression '${expression}': ${error instanceof Error ? error.message : String(error)}`);
-      return null;
+      this.outputChannel.appendLine(`Error stopping debug session: ${error instanceof Error ? error.message : String(error)}`);
+      return false;
+    }
+  }
+
+  private async getLaunchConfigurationsForFolder(folder: vscode.WorkspaceFolder): Promise<LaunchConfigurationInfo[]> {
+    try {
+      const launchJsonPath = vscode.Uri.joinPath(folder.uri, '.vscode', 'launch.json');
+
+      try {
+        const launchJsonContent = await vscode.workspace.fs.readFile(launchJsonPath);
+        const launchJson = JSON.parse(Buffer.from(launchJsonContent).toString('utf8'));
+
+        if (launchJson.configurations && Array.isArray(launchJson.configurations)) {
+          return launchJson.configurations.map((config: any) => ({
+            name: config.name || 'Unnamed Configuration',
+            type: config.type || 'unknown',
+            request: config.request || 'unknown',
+            program: config.program,
+            args: config.args,
+            cwd: config.cwd,
+            env: config.env,
+            console: config.console,
+            internalConsoleOptions: config.internalConsoleOptions,
+            ...config
+          }));
+        }
+      } catch (readError) {
+        this.outputChannel.appendLine(`Could not read launch.json for folder ${folder.name}: ${readError instanceof Error ? readError.message : String(readError)}`);
+      }
+
+      return [];
+    } catch (error) {
+      this.outputChannel.appendLine(`Error getting launch configurations for folder ${folder.name}: ${error instanceof Error ? error.message : String(error)}`);
+      return [];
     }
   }
 

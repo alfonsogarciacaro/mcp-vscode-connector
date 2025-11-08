@@ -1,6 +1,7 @@
 import * as vscode from 'vscode';
 import * as http from "http";
 import { createMcpServer } from './mcpServer';
+import { DebugConsentManager } from './debugConsentManager';
 
 let mcpServer: http.Server | null = null;
 let outputChannel: vscode.OutputChannel;
@@ -17,7 +18,11 @@ export function activate(context: vscode.ExtensionContext) {
 		stopMCPServer();
 	});
 
-	context.subscriptions.push(startCommand, stopCommand, outputChannel);
+	const manageApprovalsCommand = vscode.commands.registerCommand('mcp-vscode-connector.manageDebugApprovals', async () => {
+		await DebugConsentManager.showManageApprovalsDialog();
+	});
+
+	context.subscriptions.push(startCommand, stopCommand, manageApprovalsCommand, outputChannel);
 }
 
 async function startMCPServer() {

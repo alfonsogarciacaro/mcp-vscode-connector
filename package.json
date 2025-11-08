@@ -22,6 +22,11 @@
         "command": "mcp-vscode-connector.stopConnector",
         "title": "Stop",
         "category": "MCP Connector"
+      },
+      {
+        "command": "mcp-vscode-connector.manageDebugApprovals",
+        "title": "Manage Debug Configuration Approvals",
+        "category": "MCP Connector"
       }
     ],
     "configuration": {
@@ -38,6 +43,19 @@
           "type": "string",
           "default": "localhost",
           "description": "Host address for the MCP HTTP server"
+        },
+        "mcpVscodeConnector.approvedDebugConfigurations": {
+          "type": "array",
+          "default": [],
+          "items": {
+            "type": "string"
+          },
+          "description": "List of debug configuration names that have been approved for AI agent use"
+        },
+        "mcpVscodeConnector.requireDebugConsent": {
+          "type": "boolean",
+          "default": true,
+          "description": "Require user consent before allowing AI agents to use debug configurations"
         }
       }
     }
